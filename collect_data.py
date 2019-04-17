@@ -1,28 +1,14 @@
 import argparse
 import logging
-import multiprocessing
 import time
 
 from VLP import setup_vlp, close_vlp
 from camera import setup_camera, close_camera, shot
-from recorder import build_recorder_process
+from recorder import AsyncRecorder
 from utils import setup_logger
 
 """
-Example Usages: 
-1. Run the data collector for nearly half hour:
-    
-    python collect_data.py --exp-name 0101-Trimaran-Tracking --timestep 18000
-
-or
-
-    python collect_data.py --exp-name 0101-Trimaran-Tracking -t 18000
-    
-2. Run the data collector for not pre-defined time duration:
-
-    python collect_data.py --exp-name 0101-Trimaran-Tracking
-    
-(Note that you should press Ctrl+C to terminate this program!)
+Example usage: python collect_data.py --exp-name 20190418-test1 -m
 """
 
 if __name__ == '__main__':
@@ -36,13 +22,8 @@ if __name__ == '__main__':
 
     setup_logger(args.log_level)
 
-    log_queue = multiprocessing.Queue()
-    data_queue = multiprocessing.Queue()
-    recorder_process = multiprocessing.Process(target=build_recorder_process, args=(
-        {"exp_name": args.exp_name}, data_queue, log_queue, args.log_level, args.monitoring))
-    recorder_process.start()
-
-    vlp = setup_vlp(args.fake_lidar)
+    recorder = AsyncRecorder({"exp_name": args.exp_name, "save_dir": "experiments"}, monitoring=args.monitoring)
+    vlp = setup_vlp(args.fake_lidarv)
     cam = setup_camera()
     now = time.time()
 
@@ -58,24 +39,16 @@ if __name__ == '__main__':
             lidar_data, extra_data = vlp.update()
             frame = shot(cam)
             data_dict = {"lidar_data": lidar_data, "extra_data": extra_data, "frame": frame}
-            data_queue.put(data_dict)
-
-            if cnt % log_interval == 0:
-                if args.timestep == -1:
-                    logging.info("Data processed in frequency {}. Press Ctrl+C to terminate this program!".format(
-                        log_interval / (time.time() - now)))
-                else:
-                    logging.info("Data processed in frequency {}.".format(log_interval / (time.time() - now)))
-                now = time.time()
+            recorder.add(data_dict)
             cnt += 1
             if args.timestep > 0 and cnt == args.timestep:
                 break
+    except KeyboardInterrupt:
+        logging.critical("KEYBOARD INTERRUPTED!")
     finally:
         et = time.time()
-        logging.info("Recording Finish! It take {} seconds and collect {} data! Average FPS {}.".format(et - st, cnt,
-                                                                                                        cnt / (
-                                                                                                            et - st)))
+        logging.info("Recording Finish! It take {} seconds and collect {} data! Average FPS {}.".format(
+            et - st, cnt, cnt / (et - st)))
         close_vlp(vlp)
         close_camera(cam)
-        data_queue.put(None)
-        recorder_process.join()
+        recorder.close()
