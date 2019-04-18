@@ -19,11 +19,12 @@ if __name__ == '__main__':
     parser.add_argument("--fake-lidar", '-f', action="store_true", default=False)
     parser.add_argument("--monitoring", '-m', action="store_true", default=False)
     parser.add_argument("--test", action="store_true", default=False)
+    parser.add_argument("--save-dir", type=str, default="examples")
     args = parser.parse_args()
 
     setup_logger(args.log_level)
 
-    recorder = AsyncRecorder({"exp_name": args.exp_name, "save_dir": "experiments"}, monitoring=args.monitoring)
+    recorder = AsyncRecorder({"exp_name": args.exp_name, "save_dir": args.save_dir}, monitoring=args.monitoring)
     vlp = setup_vlp(args.fake_lidar)
     cam = setup_camera()
     now = time.time()

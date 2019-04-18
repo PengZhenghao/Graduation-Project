@@ -15,7 +15,7 @@ vlp_config = VLPConfig()
 
 # User Settings
 # VLP16_Connected = 1 #if not connected, this program will use self-created lidar data
-data_addr = 'tcp://0.0.0.0:{}'.format(vlp_config.vlp_port)  # send data to this address, including dis384,ref384,azi24
+# data_addr = 'tcp://0.0.0.0:{}'.format(vlp_config.vlp_port)  # send data to this address, including dis384,ref384,azi24
 # data_addr = 'tcp://192.168.1.222' #send data to this address, including dis384,ref384,azi24
 t_refresh = 1  # period to refresh
 
@@ -52,7 +52,7 @@ packet = np.dtype([('block', block, 12)])
 
 
 def devinitial(dev):
-    dev.pub_bind(data_addr)
+    # dev.pub_bind(data_addr)
     dev.sub_connect('tcp://{}:55004'.format(vlp_config.local_ip))
     dev.sub_connect('tcp://{}:55005'.format(vlp_config.local_ip))
     dev.sub_connect('tcp://{}:55204'.format(vlp_config.local_ip))
@@ -97,14 +97,18 @@ class VLP:
                               dtype=np.float32)  # Put it here can reduce the time of building array at update().
 
     def capture(self):
-        if not self.fake_data:
-            self.buf = self.s.recv(1206)  # length of a packet is 1206
-            # confirm the packet is ended with PacketTail
-            while self.buf[1204:1206] != PacketTail:
-                logging.warning('Wrong Factory Information!')
-                self.buf = self.s.recv(1206)
-        else:
-            self.buf = packet_created
+        try:
+            if not self.fake_data:
+                self.buf = self.s.recv(1206)  # length of a packet is 1206
+                # confirm the packet is ended with PacketTail
+                while self.buf[1204:1206] != PacketTail:
+                    logging.warning('Wrong Factory Information!')
+                    self.buf = self.s.recv(1206)
+            else:
+                self.buf = packet_created
+        except:
+            logging.error("Your LiDAR configuration is wrong! We cannot receive lidar data! Please check your LiDAR setting (like IP)")
+            raise ValueError
 
     def parse(self):
         datas = np.frombuffer(self.buf, dtype=packet, count=1)
@@ -135,7 +139,7 @@ class VLP:
         self.image[-8:] = extra_data
         self.extra_data = extra_data
         # self.image += [posx,posy,roll,pitch,yaw,posx102,posy102,self.runtime]
-        self.dev.pub_set('vlp.image', self.image)
+        # self.dev.pub_set('vlp.image', self.image)
 
     def update(self):
         # self.image = []
