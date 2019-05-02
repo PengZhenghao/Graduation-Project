@@ -5,8 +5,6 @@ from math import *
 from socket import *
 from struct import *
 
-import numpy as np
-
 from config import VLPConfig
 from msgdev import MsgDevice
 from utils import *
@@ -107,7 +105,8 @@ class VLP:
             else:
                 self.buf = packet_created
         except:
-            logging.error("Your LiDAR configuration is wrong! We cannot receive lidar data! Please check your LiDAR setting (like IP)")
+            logging.error(
+                "Your LiDAR configuration is wrong! We cannot receive lidar data! Please check your LiDAR setting (like IP)")
             raise ValueError
 
     def parse(self):
@@ -138,8 +137,6 @@ class VLP:
         extra_data = np.asarray([posx, posy, roll, pitch, yaw, posx102, posy102, self.runtime])
         self.image[-8:] = extra_data
         self.extra_data = extra_data
-        # self.image += [posx,posy,roll,pitch,yaw,posx102,posy102,self.runtime]
-        # self.dev.pub_set('vlp.image', self.image)
 
     def update(self):
         # self.image = []
@@ -147,7 +144,6 @@ class VLP:
             self.capture()
             self.parse()
             self.packet = np.hstack((self.dis384.flatten(), self.azi24.flatten()))
-            # self.image = self.image+self.packet.tolist()
             self.lidar_data[408 * i: 408 * (i + 1)] = self.packet
             self.image[408 * i: 408 * (i + 1)] = self.packet
         self.publish()
