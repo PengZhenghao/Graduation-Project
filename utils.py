@@ -93,13 +93,14 @@ ESC = 27
 
 
 class Visualizer(object):
-    def __init__(self, name, side_length, zoom=1.0, max_size=800):
+    def __init__(self, name, side_length, smooth=True, zoom=1.0, max_size=800):
         self.name = name
         self.max = AverageMeter()
         self.min = AverageMeter()
         self.mean = AverageMeter()
         self.std = AverageMeter()
         self.max_size = max_size
+        self.smooth = smooth
         self.central_ratio = 1 / zoom
         self.side_length = side_length  # Side length is the length of the detecting area, in meters.
         self.image = np.empty((max_size, max_size, 3), dtype=np.uint8)
@@ -111,6 +112,9 @@ class Visualizer(object):
         assert image.ndim == 2
         assert image.shape[0] == image.shape[1]
         return cv2.resize(image, (self.max_size, self.max_size))
+
+    def _normalize_plain(self, image):
+        return 255 * (image - image.min()) / (image.max() - image.min() + 1e-6)
 
     def _normalize_range(self, image):
         self.max.update(image.max())
@@ -151,7 +155,10 @@ class Visualizer(object):
 
     def draw(self, image):
         # Input range: [0, 259.0], dtype=float64
-        heatmap = self._normalize_range(image)
+        if self.smooth:
+            heatmap = self._normalize_range(image)
+        else:
+            heatmap = self._normalize_plain(image)
         heatmap = heatmap.astype(np.uint8)
         heatmap = self._zoom(heatmap)
         heatmap = self._scale(heatmap)

@@ -27,9 +27,10 @@ min_ref = 0  # a point with reflectivity lower than this value will be regarded 
 # vlp_addr = ('192.168.1.255',2368) #ip and port of vlp16
 # vlp_addr = (INADDR_ANY,2368) #ip and port of vlp16
 res_azi = vlp_frequency * 2  # resolution of azimuth angle
-num_packet = ceil(36000 / (res_azi * 24))  # number of packets in one image, 150 when vlp_frequency is 5Hz.
-packet_created = (
-                     b'\xff\xee\x33\x71' + b'\x89\x59\x17' * 32) * 12 + b'\x61\x67\xb9\x5a\x37\x22'  # when vlp16 is not connected, use this packet to debug
+num_packet = ceil(
+    36000 / (res_azi * 24))  # number of packets in one image, 150 when vlp_frequency is 5Hz.
+# when vlp16 is not connected, use this packet to debug
+packet_created = (b'\xff\xee\x33\x71' + b'\x89\x59\x17' * 32) * 12 + b'\x61\x67\xb9\x5a\x37\x22'
 
 # Structure of vlp16 raw data
 PacketTail = vlp_returnmode + b'\x22'
@@ -70,7 +71,8 @@ class VLP:
         try:
             self.s = socket(AF_INET, SOCK_DGRAM)
         except socket.error as msg:
-            logging.error('Failed to create socket. Error code:' + str(msg[0]) + ', Error message:' + msg[1])
+            logging.error(
+                'Failed to create socket. Error code:' + str(msg[0]) + ', Error message:' + msg[1])
             raise
         else:
             logging.info('Socket Created.')

@@ -9,7 +9,9 @@ vlp_frequency = 10  # frequency of vlp16, matching its setting on web
 
 # Image Settings
 image_size = 50  # side length of a square image
+# image_size = 5  # side length of a square image
 grid_size = 0.2  # grid size in image
+# grid_size = 0.02  # grid size in image
 min_dis = 1  # ignore reflection nearer than the minimum distance
 vrange = 1.5  # vertical value range from -vrange to vrange
 
@@ -91,26 +93,34 @@ class Image:
 
 ESC = 27
 if __name__ == "__main__":
-    from utils import read_data, Visualizer
+    from utils import Visualizer
+    from VLP import setup_vlp
 
-    data = read_data("raw_data/data/2019-04-25_13-48-02/2019-04-25_13-48-02.h5")
-    lidar_data = data['lidar_data']
-    extra_data = data['extra_data']
-    assert lidar_data.shape[1] == 30600
+    # data = read_data("raw_data/data/2019-04-25_13-48-02/2019-04-25_13-48-02.h5")
+    # lidar_data = data['lidar_data']
+    # extra_data = data['extra_data']
+    # assert lidar_data.shape[1] == 30600
 
     image = Image()
-    v = Visualizer("image_n", image_size, zoom=5)
+    vlp = setup_vlp()
+    v = Visualizer("image_n", image_size, zoom=1)
 
-    # image.update(lidar_data[66])
+    from utils import FPSTimer
 
-    # visualize(image.image_low, "image_low")
-    # visualize(image.image_high, "image_high")
-    # visualize(image.image_height, "image_height")
-    # visualize(image.image_n, "image_n")
-    # visualize(image.image_refmean, "image_refmean")
+    fpstimer = FPSTimer()
 
-    for i, e in zip(lidar_data, extra_data):
-        image.update(i, e)
-        stop = v.draw(image.image_n)
-        if stop:
-            break
+    while True:
+        with fpstimer:
+            lidar_data, extra_data = vlp.update()
+            ret = image.update(lidar_data, extra_data)
+            stop = v.draw(image.image_high)
+            if stop:
+                break
+                # while True:
+                #     lidar_data, extra_data = vlp.update()
+                #     image.update(lidar_data, extra_data)
+                #     stop = v.draw(image.image_n)
+                #     if stop:
+                #         break
+                #
+                # close_vlp(vlp)
