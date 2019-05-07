@@ -3,7 +3,13 @@ import os
 import time
 from math import cos, sin
 
+import cv2
 import h5py
+import numpy as np
+
+ESC = 27
+
+from collections import deque
 
 
 def get_formatted_time(timestamp=None):
@@ -85,13 +91,6 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-# from utils import AverageMeter
-import numpy as np
-import cv2
-
-ESC = 27
-
-
 class Visualizer(object):
     def __init__(self, name, side_length, smooth=True, zoom=1.0, max_size=800):
         self.name = name
@@ -135,10 +134,12 @@ class Visualizer(object):
         text_width = int(0.05 * self.len)
         self._put_text((self.len - 2 * text_width, self.len // 2),
                        "+{:.1f}".format(self.side_length * self.central_ratio / 2))
-        self._put_text((text_width, self.len // 2), "-{:.1f}".format(self.side_length * self.central_ratio / 2))
+        self._put_text((text_width, self.len // 2),
+                       "-{:.1f}".format(self.side_length * self.central_ratio / 2))
         self._put_text((self.len // 2, self.len - text_width),
                        "-{:.1f}".format(self.side_length * self.central_ratio / 2))
-        self._put_text((self.len // 2, text_width), "+{:.1f}".format(self.side_length * self.central_ratio / 2))
+        self._put_text((self.len // 2, text_width),
+                       "+{:.1f}".format(self.side_length * self.central_ratio / 2))
 
     def _put_text(self, pos, text, color=(255, 255, 255), thickness=1, font_size=0.4):
         font = cv2.FONT_HERSHEY_SIMPLEX
@@ -175,7 +176,29 @@ class Visualizer(object):
         return False
 
 
-from collections import deque
+class Reader(object):  # This class should merged with Recorder. But I don't give a shit for this.
+    def __init__(self, path):
+        assert os.path.isfile(path)
+        assert path.endswith(".h5")
+        self.file = h5py.File(path, 'r')
+        self.p = 0  # pointer
+        self.len = len(self.file["lidar_data"])
+
+    def update(self):  # match the API of the live stream VLP object.
+        if self.p < self.len:
+            ret = self.file["lidar_data"][self.p], self.file["extra_data"][self.p]
+            self.p += 1
+            return ret
+        raise EOFError
+
+    def close(self):
+        self.file.close()
+
+
+def assert_euqal(a1, a2):
+    max_diff = np.max(np.abs(a1 - a2))
+    logging.debug("Here is a assertion! Please delete it! The differences: {}".format(max_diff))
+    assert max_diff < 1e-6
 
 
 class FPSTimer(object):
@@ -193,9 +216,9 @@ class FPSTimer(object):
             return
 
         logging.info(
-            "Average FPS {:.4f} (Smoothed by averaging last {} frames).".format(
+            "Average FPS {:.4f} (Smoothed by averaging last {} frames, total passed {} frames).".format(
                 self.log_interval / (et - self.queue[0]),
-                self.log_interval))
+                self.log_interval, self.cnt))
         # self.st = et
 
     def __exit__(self, exc_type, exc_val, exc_tb):
