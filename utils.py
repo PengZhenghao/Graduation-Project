@@ -27,6 +27,14 @@ def get_formatted_log_file_name():
                          time.localtime())
 
 
+def np_logical_and_list(*lis):
+    if len(lis) < 2:
+        return lis
+    mask = lis[0]
+    for exp in lis[1:]:
+        mask = np.logical_and(mask, exp)
+    return mask
+
 def setup_logger(log_level='INFO'):
     assert isinstance(log_level, str)
     if not os.path.exists("log"):
