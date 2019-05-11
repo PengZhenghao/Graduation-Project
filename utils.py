@@ -127,7 +127,7 @@ from collections import deque
 class MovingAverage(object):
     def __init__(self, max_len=10):
         self.val = deque(maxlen=max_len)
-        self.avg = 0
+        self.avg = None
         self.maxlen = max_len
 
     def update(self, val):
@@ -137,6 +137,7 @@ class MovingAverage(object):
 
 color_white = (255, 255, 255)
 color_yellow = (65, 254, 254)
+color_green = (0, 255, 0)
 
 
 class Visualizer(object):
@@ -197,30 +198,6 @@ class Visualizer(object):
         font = cv2.FONT_HERSHEY_SIMPLEX
         cv2.putText(self.image, text, pos, font, font_size, color, thickness)
 
-    def _draw_bounding_box(self, bounding_boxes_dict, max_size, color=color_white, thickness=1):
-
-        for text, (x_min, x_max, y_min, y_max) in bounding_boxes_dict.items():
-            if x_max <= x_min or y_max <= y_min:
-                err = "EMPTY CLUSTER FOUND! xmin {}, xmax {}, ymin {}, ymax {}".format(x_min, x_max,
-                                                                                       y_min, y_max)
-                logging.error(err)
-                continue
-
-            pos = (x_min,
-                   y_min - 4 if y_max * 1.1 > max_size else y_max + 2)
-
-            x_min, y_min = self._convert((x_min, y_min))
-            x_max, y_max = self._convert((x_max, y_max))
-            points = ((x_min, y_min),
-                      (x_min, y_max),
-                      (x_max, y_max),
-                      (x_max, y_min),
-                      (x_min, y_min))
-            for p1, p2 in zip(points[:-1], points[1:]):
-                cv2.line(self.image, p1, p2, color, thickness=thickness)
-            pos = self._convert(pos)
-            self._draw_text(pos, text)
-
     def _zoom(self, image):
         if self.central_ratio < 1:
             x = image.shape[0] // 2
@@ -234,36 +211,21 @@ class Visualizer(object):
         return int(pos[0] * self.scale), int(
             self.max_size - pos[1] * self.scale / self.central_ratio)
 
-    def _draw_objects(self, objects, color=color_white, thickness=1):
-        for label, info in objects.items():
-            x_min, y_min, x_max, y_max = info["bounding_box"]
+    def _draw_bounding_box(self, bounding_box, color, info=None):
+        x_min, y_min, x_max, y_max = bounding_box
 
-            x_min, y_min = self._convert((x_min, y_min))
-            x_max, y_max = self._convert((x_max, y_max))
-            points = ((x_min, y_min),
-                      (x_min, y_max),
-                      (x_max, y_max),
-                      (x_max, y_min),
-                      (x_min, y_min))
+        x_min, y_min = self._convert((x_min, y_min))
+        x_max, y_max = self._convert((x_max, y_max))
+        points = ((x_min, y_min),
+                  (x_min, y_max),
+                  (x_max, y_max),
+                  (x_max, y_min),
+                  (x_min, y_min))
 
-            for p1, p2 in zip(points[:-1], points[1:]):
-                cv2.line(self.image, p1, p2, color, thickness=thickness)
+        for p1, p2 in zip(points[:-1], points[1:]):
+            cv2.line(self.image, p1, p2, color)
 
-            # TODO too clumsy!
-            if "search_range" in info:
-                x_min, y_min, x_max, y_max = info["search_range"]
-
-                x_min, y_min = self._convert((x_min, y_min))
-                x_max, y_max = self._convert((x_max, y_max))
-                points = ((x_min, y_min),
-                          (x_min, y_max),
-                          (x_max, y_max),
-                          (x_max, y_min),
-                          (x_min, y_min))
-
-                for p1, p2 in zip(points[:-1], points[1:]):
-                    cv2.line(self.image, p1, p2, color_yellow, thickness=thickness)
-
+        if info:
             if y_max > 0.95 * self.max_size:
                 increment = -15
                 ref = y_max
@@ -271,14 +233,13 @@ class Visualizer(object):
                 increment = +15
                 ref = y_min
             pos = [x_min, min(max(ref + increment, 0), self.max_size)]
-
             text = "{}: {}".format(info["name"], info["status"])
 
-            self._draw_text(pos, text)
+            self._draw_text(pos, text, color)
             pos[1] = min(max(pos[1] + increment, 0), self.max_size)
 
             text = "({:.2f},{:.2f})".format(*info["centroid"])
-            self._draw_text(pos, text)
+            self._draw_text(pos, text, color)
             pos[1] = min(max(pos[1] + increment, 0), self.max_size)
 
             for k, v in info.items():
@@ -288,10 +249,20 @@ class Visualizer(object):
                     text = "{:8.8}:{}".format(k, v)
                 else:
                     continue
-                self._draw_text(pos, text)
+                self._draw_text(pos, text, color)
                 pos[1] = min(max(pos[1] + increment, 0), self.max_size)
 
-    def draw(self, image, objects=None):
+    def _draw_objects(self, objects, target=None, color=color_white):
+        for label, info in objects.items():
+            if target and label == target:
+                c = color_green
+            else:
+                c = color
+            self._draw_bounding_box(info["bounding_box"], c, info=info)
+            if "search_range" in info:
+                self._draw_bounding_box(info["search_range"], color_yellow)
+
+    def draw(self, image, objects=None, target=None):
         # We ask the coordination of all input are in the standard form.
         self.scale = self.max_size / image.shape[0]
         if self.smooth:
@@ -304,7 +275,13 @@ class Visualizer(object):
         self.image = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
         self._add_reference()
         if objects:
-            self._draw_objects(objects)
+            self._draw_objects(objects, target)
+        if isinstance(target, list):
+            self._draw_text(self._convert((10, 10)),
+                            "Press Num Key to Specify Target: {}".format(target), font_size=0.8)
+        else:
+            self._draw_text(self._convert((10, 10)),
+                            "Current Target: {} (Press Q to quit)".format(target), font_size=0.8)
         return self.display()
 
     def display(self):
@@ -312,8 +289,7 @@ class Visualizer(object):
         key = cv2.waitKey(1)
         if key == ESC:
             cv2.destroyAllWindows()
-            return True
-        return False
+        return key
 
 
 class Reader(object):  # This class should merged with Recorder. But I don't give a shit for this.

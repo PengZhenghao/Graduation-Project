@@ -277,6 +277,16 @@ class Detector(object):
                 for obj_label, obj_info in self._object_dict.items()
                 if obj_info["confidence"] > self.config["min_detected_confidence"]}
 
+    @property
+    def availiable_obejct_keys(self):
+        ret = {}
+        for obj_label, obj_info in self._object_dict.items():
+            if obj_info["confidence"] > self.config["min_detected_confidence"]:
+                index = obj_label.split(' ')[1]
+                key = ord(str(index))
+                ret[key] = obj_label
+        return ret
+
     def update(self, input_dict):
         points, weight, high, low = input_dict["points"], input_dict["weight"], input_dict["high"], \
                                     input_dict["low"]
@@ -297,7 +307,7 @@ class Detector(object):
 
 
 if __name__ == "__main__":
-    from utils import setup_logger, FPSTimer, Visualizer
+    from utils import setup_logger, FPSTimer, Visualizer, ESC
     import os
     import argparse
     from lidar_map import LidarMap, lidar_config
@@ -337,15 +347,29 @@ if __name__ == "__main__":
 
     save_data = []
     stop = False
+    pressed_key = -1
+    target = None
+
     for l, e in zip(lidar_data, extra_data):
         with fps_timer:
             ret = map.update(l, e)
             object_d = detector.update(ret)
+            avaliables = detector.availiable_obejct_keys
+            if pressed_key in avaliables:
+                target = avaliables[pressed_key]
+            elif pressed_key == ord("q"):
+                target = None
+            elif target in object_d.keys():
+                pass
+            else:
+                target = None
+
             if args.save:
                 save_data.append(ret)
             if args.render:
-                stop = v.draw(ret["map_n"], objects=object_d)
-                if stop:
+                pressed_key = v.draw(ret["map_n"], objects=object_d,
+                                     target=target or list(avaliables.values()))
+                if pressed_key == ESC:
                     break
 
     if args.save:
