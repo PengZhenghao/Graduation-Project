@@ -111,8 +111,6 @@ class LidarMap(object):
 
     def update(self, lidar_data, extra_data):
         self.refresh()
-        # posx, posy, roll, pitch, yaw, posx102, posy102 \
-        #     = extra_data[:7]
         posx, posy = extra_data[:2]
         ret = self.parse(lidar_data)
 

@@ -9,8 +9,6 @@ import numpy as np
 
 ESC = 27
 
-from collections import deque
-
 
 def get_formatted_time(timestamp=None):
     # assert isinstance(timestamp)
@@ -123,7 +121,22 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
+from collections import deque
+
+
+class MovingAverage(object):
+    def __init__(self, max_len=10):
+        self.val = deque(maxlen=max_len)
+        self.avg = 0
+        self.maxlen = max_len
+
+    def update(self, val):
+        self.val.append(val)
+        self.avg = sum(self.val) / self.maxlen
+
+
 color_white = (255, 255, 255)
+color_yellow = (65, 254, 254)
 
 
 class Visualizer(object):
@@ -138,7 +151,7 @@ class Visualizer(object):
         self.smooth = smooth
         self.central_ratio = 1 / zoom
         self.side_length = side_length  # Side length is the length of the detecting area, in meters.
-        self.image = np.empty((max_size, max_size, 3), dtype=np.uint8)
+        self.image = np.zeros((max_size, max_size, 3), dtype=np.uint8)
         self.len = self.image.shape[0]
         assert self.central_ratio <= 1
 
@@ -185,7 +198,6 @@ class Visualizer(object):
         cv2.putText(self.image, text, pos, font, font_size, color, thickness)
 
     def _draw_bounding_box(self, bounding_boxes_dict, max_size, color=color_white, thickness=1):
-        color = (color[2], color[1], color[0])
 
         for text, (x_min, x_max, y_min, y_max) in bounding_boxes_dict.items():
             if x_max <= x_min or y_max <= y_min:
@@ -223,10 +235,7 @@ class Visualizer(object):
             self.max_size - pos[1] * self.scale / self.central_ratio)
 
     def _draw_objects(self, objects, color=color_white, thickness=1):
-        color = (color[2], color[1], color[0])
-
         for label, info in objects.items():
-
             x_min, y_min, x_max, y_max = info["bounding_box"]
 
             x_min, y_min = self._convert((x_min, y_min))
@@ -240,7 +249,22 @@ class Visualizer(object):
             for p1, p2 in zip(points[:-1], points[1:]):
                 cv2.line(self.image, p1, p2, color, thickness=thickness)
 
-            if y_min < 0.05 * self.max_size:
+            # TODO too clumsy!
+            if "search_range" in info:
+                x_min, y_min, x_max, y_max = info["search_range"]
+
+                x_min, y_min = self._convert((x_min, y_min))
+                x_max, y_max = self._convert((x_max, y_max))
+                points = ((x_min, y_min),
+                          (x_min, y_max),
+                          (x_max, y_max),
+                          (x_max, y_min),
+                          (x_min, y_min))
+
+                for p1, p2 in zip(points[:-1], points[1:]):
+                    cv2.line(self.image, p1, p2, color_yellow, thickness=thickness)
+
+            if y_max > 0.95 * self.max_size:
                 increment = -15
                 ref = y_max
             else:
@@ -267,7 +291,7 @@ class Visualizer(object):
                 self._draw_text(pos, text)
                 pos[1] = min(max(pos[1] + increment, 0), self.max_size)
 
-    def draw(self, image, objects=None, bounding_boxes_dict=None):
+    def draw(self, image, objects=None):
         # We ask the coordination of all input are in the standard form.
         self.scale = self.max_size / image.shape[0]
         if self.smooth:
@@ -281,9 +305,6 @@ class Visualizer(object):
         self._add_reference()
         if objects:
             self._draw_objects(objects)
-
-        if bounding_boxes_dict:
-            self._draw_bounding_box(bounding_boxes_dict, image.shape[0])
         return self.display()
 
     def display(self):

@@ -1,146 +1,106 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
-
 from math import sqrt
 
 import numpy as np
 from sklearn.cluster import DBSCAN
-from sklearn.decomposition import PCA
 
-from config import slam_config
-from utils import np_logical_and_list
+from config import detector_config
+from utils import np_logical_and_list, build_index_to_location, build_location_to_index
 
-# Image Settings
-# Cluster Settings
-# minarea_cluster = 3
-# neighborsize = 2
-# mindensity_normal = 3
-# mindensity_fast = 6
-# Object Settings
-# maxlen_obj = 4
-# maxlow_obj = 1.5
-# Cluster to object settings
-# c2o_hlimit = 0.5  # maximum difference in h
-# c2o_alimit = 5  # maximum difference in area
-# c2o_rlimit = 0.2  # maximum difference in B/L
-# c2o_vlimit = 3  ##maximum velocity
-#
-# # Object to map settings
-# o2m_dlimit = 1  # maximum moving distance of a static obstacle
-#
-# # Confidence level settings
-# maxlevel_obj = 24
-# minlevelgood_obj = 4
-# # confidence_max = 20
-# # confidence_min = 10  # minimum confidence level of static obstacles in global map
-#
-# # Kalman Filter of vx,vy settings
-# kf_p0 = 1
-# kf_q = 0.25
-# kf_r = 1
-# def pca(coor):
-#     data_adj = coor - np.mean(coor, axis=0)
-#     cov = np.cov(data_adj, rowvar=False)
-#     eigVals, eigVects = np.linalg.eig(np.mat(cov))
-#     eigValInd = np.argsort(eigVals)
-#     redEigVects = eigVects[:, eigValInd]
-#     mainvec0 = redEigVects[0, 1]
-#     mainvec1 = redEigVects[1, 1]
-#     if mainvec0 == 0:
-#         heading = pi / 2
-#     else:
-#         heading = atan(mainvec1 / mainvec0)
-#     return data_adj.dot(redEigVects), heading
-# def kf(vx_old, vy_old, vx_sensor, vy_sensor, var_old):
-#     k = (var_old + kf_q) / (var_old + kf_q + kf_r)
-#     vx = (1 - k) * vx_old + k * vx_sensor
-#     vy = (1 - k) * vy_old + k * vy_sensor
-#     var = (1 - k) * (var_old + kf_q)
-#     return vx, vy, var
-# def sub_image(subnum, data, title, picsize, cmaptype='viridis'):
-#     plt.subplot(subnum)
-#     img = data * 1
-#     for i in range(picsize):
-#         img[:, i] = img[:, i][::-1]
-#     imgplot = plt.imshow(img, cmap=cmaptype)
-#     plt.xlabel('y')
-#     plt.ylabel('x')
-#     plt.colorbar()
-#     plt.title(title)
-
-EMPTY = -1
-
-from utils import build_index_to_location, build_location_to_index
+LOST = "LOST"
+JUST_FOUND = "JUST_FOUND"
+TRACKING = "TRACKING"
+CONFIRMING = "CONFIRMING"
 
 
-class SLAM(object):
-    def __init__(self, config=slam_config):
+class DetectedObject(dict):
+    def __init__(self, name, cluster_property, config):
+        super(DetectedObject, self).__init__(cluster_property)
+        self.config = config or detector_config
+        self.config["num_grid"] = round(self.config["map_size"] / self.config["grid_size"])
+        self["confidence"] = self.config["init_confidence"]
+        self["name"] = name
+        self["status"] = JUST_FOUND
+        points = cluster_property["occupied_grids"]
+        self["bounding_box"] = points.min(0).tolist() + points.max(0).tolist()
 
+    def increase_confidence(self):
+        self["confidence"] = min(self["confidence"] + 1, self.config["max_confidence"])
+
+    def decrease_confidence(self):
+        self["confidence"] = max(self["confidence"] - 1, self.config["min_removal_confidence"])
+
+    def update_property(self, cluster_property):
+        points = cluster_property["occupied_grids"]
+        self["bounding_box"] = points.min(0).tolist() + points.max(0).tolist()
+        self.update(cluster_property)
+        self["status"] = CONFIRMING if self["confidence"] < self.config["min_detected_confidence"] \
+            else TRACKING
+        if self["status"] is not LOST and "search_range" in self:
+            self.pop("search_range")
+            self.pop("search_radius")
+
+    def lost(self):
+        if self["status"] == LOST:
+            if "search_radius" not in self:
+                search_radius = 5 * (self["length"] / self.config["grid_size"])
+            else:
+                search_radius = self["search_radius"] + self["length"] * 2
+            x_min, y_min, x_max, y_max = self["bounding_box"]
+            x_min = max(0, x_min - search_radius // 2)
+            y_min = max(0, y_min - search_radius // 2)
+            x_max = min(self.config["num_grid"], x_max + search_radius // 2)
+            y_max = min(self.config["num_grid"], y_max + search_radius // 2)
+            self["search_range"] = x_min, y_min, x_max, y_max
+            self["search_radius"] = search_radius
+        self["status"] = LOST
+        if self["confidence"] <= self.config["min_removal_confidence"]:
+            return True
+        return False
+
+    def __repr__(self):
+        return "<{}: {}>".format(self['name'], self['status'])
+
+
+class Detector(object):
+    def __init__(self, config=detector_config):
         self.config = config
-
         self.grid_size = self.config["grid_size"]
         self.min_cluster_occupied_grids = self.config["min_cluster_occupied_grids"]
-        # self.min_confidence = self.config["min_confidence"]
-
         self.map_size = self.config["map_size"]
         self.num_grid = round(self.map_size / self.grid_size)
-
         self.shape = (self.num_grid, self.num_grid)
         self.location_to_index = build_location_to_index(self.config)
         self.index_to_location = build_index_to_location(self.config)
 
-        # CHART 是静态海图的意思！
-        # self.global_chart = np.zeros((int_ceil((x_chart[1] - x_chart[0]) / self.grid_size),
-        #                               int_ceil((y_chart[1] - y_chart[
-        #                                   0]) / self.grid_size)))  # initialize global chart
-        # self.global_chart = [1000, 1000]
-        # self.local_chart = None
-
-
-        # for i in range(int_ceil((x_chart[1] - x_chart[0]) / self.grid_size)):
-        #     for j in range(int_ceil((y_chart[1] - y_chart[0]) / self.grid_size)):
-        #         self.global_chart[i, j] = chart[i // num_chartrans, j // num_chartrans]
-
-        # self.global_confidence_map = self.global_chart * self.config["min_confidence"]
-        # initialize global static obstacle map
-
-        # self.global_confidence_map_output = np.zeros((num_out_x, num_out_y))
         self._confidence_map = np.zeros(self.shape, dtype=np.int)
-
         self._object_dict = {}
-
         self._object_label_waiting_list = []
-
         self._detected_object_number = 0
-
-        self._cluster_map = np.ones(self.shape, dtype=np.int) * EMPTY
-        # self._occupied_map = np.zeros(self.shape, dtype=np.bool)
-
-        self.debug = {}
-
-        # initialize output global static obstacle map
-
-        # LOOK AT HERE! TODO here is the format of object!
-        # [area,x_min,x_max,y_min,y_max,l,b,heading,h,vx,vy,
-        # var_v,dis_x,dis_y,confidence level,cluster_num,object label]
-
-        self.objects = np.zeros((0, 17))
-        self.runtime = 0
-        self.num_pub = 0
-        # self.object_label = 0
-
+        # self.runtime = 0
+        # self.num_pub = 0
         self.clustering_algo = DBSCAN(eps=self.config["neighborhood_size"],
                                       min_samples=self.config[
                                           "neighborhood_min_samples"])  # min sample=6 should be the FAST MODE
-        self.pca = PCA()  # min sample=6 should be the FAST MODE
-        # Use config to change the hyper
-        # TODO check if the input is in physical metrics,.
-
-        # self.clustering_algo = DBSCAN(eps=1.5, min_samples=6) # Use config to change the hyper
         logging.info('Global Map Created.')
 
-    # def _compute_iou(self, previous_points, current_points):
-    def _compute_overlap(self, object, cluster):
+    def _compute_object_overlap(self, obj1, obj2):
+
+        x_min1, y_min1, x_max1, y_max1 = obj1["bounding_box"]
+        x_min2, y_min2, x_max2, y_max2 = obj2["bounding_box"]
+
+        intersection = max(0, (min(x_max1, x_max2) - max(x_min1, x_min2))) * \
+                       max(0, (min(y_max1, y_max2) - max(y_min1, y_min2)))
+        if intersection < 1e-6:
+            return 0
+        union = (y_max2 - y_min2) * (x_max2 - x_min2) + (y_max1 - y_min1) * (
+            x_max1 - x_min1) - intersection
+        assert union >= -1e-6
+        assert intersection <= union
+        return intersection / union
+
+    def _compute_overlap(self, obj, cluster):
         # Now the intesection over union is not proper here.
         # Since we are using the bounding box to serve as the target.
         # So it can be naturally a very small IoU even if the cluster is in the bounding box.
@@ -148,35 +108,24 @@ class SLAM(object):
         # which is still not greater than 1.
 
         current_points = cluster["occupied_grids"]
-
-        # assert current_points.dtype == np.int
-        # assert previous_points.dtype == np.int
-        # assert current_points.ndim == 2
-        # assert previous_points.ndim == 2
-
-        x_min, y_min, x_max, y_max = object["bounding_box"]
-
-        # points1_flat = current_points[:, 0] * self.num_grid + current_points[:, 1]
-        # points2_flat = np.arange(x_min, x_max + 1)
-
-
-        # np+current_points[:, 0]<=x_max
-        intersection = np_logical_and_list(x_min <= current_points[:, 0],
-                                           current_points[:, 0] <= x_max,
-                                           y_min <= current_points[:, 1],
-                                           current_points[:, 1] <= y_max).sum()
-        return intersection / (current_points.shape[0] + 1e-6)
+        current_weight = cluster["occupied_weight"]
+        if "search_range" in obj:
+            x_min, y_min, x_max, y_max = obj["search_range"]
+        else:
+            x_min, y_min, x_max, y_max = obj["bounding_box"]
+        intersection_mask = np_logical_and_list(x_min <= current_points[:, 0],
+                                                current_points[:, 0] <= x_max,
+                                                y_min <= current_points[:, 1],
+                                                current_points[:, 1] <= y_max)
+        intersection = current_weight[intersection_mask].sum()
+        union = current_weight.sum()
+        return intersection / union
 
     def _remove_object(self, obj_label):
-        assert self._object_dict[obj_label]["confidence"] == 0
         if obj_label not in self._object_dict:
-            logging.warning("obj_label {} not found in self._cluster_dict, \
-            which contains {}.".format(obj_label, self._object_dict))
             return
         self._object_label_waiting_list.append(obj_label)
-        obj_info = self._object_dict.pop(obj_label)
-        occupied_grids = obj_info["occupied_grids"]
-        self._cluster_map[occupied_grids[:, 0], occupied_grids[:, 1]] = EMPTY
+        self._object_dict.pop(obj_label)
 
     def _fit(self, points, weight):
         if len(points) == 0:
@@ -185,21 +134,14 @@ class SLAM(object):
         return labels
 
     def _find_cluster(self, points, weight, high, low, occupied_grids):
-
         if len(points) < 1:
-            logging.warning("No point found in receptive field.")
+            logging.info("No point found in receptive field.")
             return {}
-
         labels = self._fit(points, weight)
-
-        self.debug["labels"] = labels
-
         cluster_num = labels.max()
-
         if cluster_num < 0:
-            logging.debug("No cluster found.")
+            logging.info("No cluster found in receptive field.")
             return {}
-
         raw_cluster_dict = {
             i:
                 {  # cluster info
@@ -210,53 +152,30 @@ class SLAM(object):
                     "mask": labels == i,
                     "occupied_grids": occupied_grids[labels == i]
                 }
-            for i in range(cluster_num)
+            for i in range(0, cluster_num + 1)
         }
-
-        for label, cluster_info in raw_cluster_dict.items():
-            points = cluster_info["points"]
-            indices = self.location_to_index(points)
-            self._cluster_map[indices] = label
-
         return raw_cluster_dict
 
     def _process_cluster(self, raw_cluster_dict):
-        assert isinstance(raw_cluster_dict, dict)
         cluster_properties = {}
-
         for label, cluster_info in raw_cluster_dict.items():
-            # locations = cluster_info["points"]
-
-            points = cluster_info["points"]
-            # assert points.shape[1] == 2
-            # assert points.ndim == 2
-
-            occupied_grids = len(points)
-            # assert occupied_grids == len(np.unique(points, axis=0))
-
             # calculate basic properties of each cluster
-            high_cluster = cluster_info["high"].max()  # get the highest
-            low_cluster = cluster_info["low"].min()  # get the lowest
-
+            points = cluster_info["points"]
             weight = cluster_info["weight"]
             centroid = np.dot(weight, points) / weight.sum()
-
             length = sqrt(np.sum(np.square(points - centroid), axis=1).max()) * 2
 
+            num_occupied_grids = len(points)
             cluster_properties[label] = {
-                "area": occupied_grids * self.grid_size * self.grid_size,
-                # "x_min": points.
+                "area": num_occupied_grids * self.grid_size * self.grid_size,
                 "length": length,
                 "centroid": centroid,
-                "density": cluster_info["weight"].sum() / occupied_grids,
+                "density": weight.sum(),
                 "occupied": cluster_info["occupied_grids"].shape[0],
-                # "b": b_cluster,
-                # "heading": heading_cluster,
-                "high": high_cluster,
-                "low": low_cluster,
-                "label": label,
+                "high": cluster_info["high"].max(),
+                "low": cluster_info["low"].min(),
                 "occupied_grids": cluster_info["occupied_grids"],
-                # "confidence": 0.0,
+                "occupied_weight": weight,
             }
         return cluster_properties
 
@@ -268,82 +187,91 @@ class SLAM(object):
             new_label = self._object_label_waiting_list.pop(0)
         return new_label
 
-    def _should_discard_cluster(self, cluster):
-        if len(cluster["occupied_grids"]) < self.min_cluster_occupied_grids:
-            # some clusters were absorbed by others, some are too small to be an object
-            return True
-        if cluster["length"] > self.config["max_object_length"]:
-            return True
-        if cluster["high"] > self.config["max_object_bottom_height"]:
-            return True
-        return False
-
-    def _increase_confidence(self, label):
-        assert label in self._object_dict
-        self._object_dict[label]["confidence"] = min(self._object_dict[label]["confidence"] + 1,
-                                                     self.config["max_confidence"])
-
-    def _decrease_confidence(self, label):
-        assert label in self._object_dict
-        self._object_dict[label]["confidence"] = max(self._object_dict[label]["confidence"] - 1, 0)
-
     def _create_object(self, cluster):
         label = self._get_new_label()
-        cluster["confidence"] = self.config["init_confidence"]
-        cluster["name"] = label
-        points = cluster["occupied_grids"]
-        cluster["bounding_box"] = points.min(0).tolist() + points.max(0).tolist()
-        cluster["status"] = "JUST FOUND"
-        self._object_dict[label] = cluster
+        self._object_dict[label] = DetectedObject(label, cluster, self.config)
         return label
 
-    def _update_object(self, obj_label, cluster):
-        points = cluster["occupied_grids"]
-        cluster["bounding_box"] = points.min(0).tolist() + points.max(0).tolist()
-        self._object_dict[obj_label].update(cluster)
-        self._object_dict[obj_label]["status"] = "CONFIRMING" \
-            if self._object_dict[obj_label]["confidence"] < self.config["min_detected_confidence"] \
-            else "TRACKING"
-
-    def _lost_object(self, obj_label):
-        self._decrease_confidence(obj_label)
-        self._object_dict[obj_label]["status"] = "LOST"
-        if self._object_dict[obj_label]["confidence"] <= \
-                self.config["min_removal_confidence"]:
-            self._remove_object(obj_label)
-
     def _register_cluster(self, cluster_properties):
-        objects_to_cluster = {k: [] for k in self._object_dict.keys()}
+        modified_objects = set()
+        checked_cluster = set()
+
+        for label, obj in self._object_dict.items():  # for each object
+            possible_clusters = {}
+            if obj["status"] is not LOST:
+                continue
+
+            for cluster_label, cluster in cluster_properties.items():
+                overlap = self._compute_overlap(obj, cluster)
+                if overlap > self.config["overlap_threshold"]:
+                    possible_clusters[cluster_label] = overlap
+
+            if possible_clusters:
+                target_cluster_label = max(
+                    possible_clusters)  # max would return the "key" of the maximum "value".
+                obj.update_property(
+                    cluster_properties[target_cluster_label])  # _update_object(label, cluster)
+                modified_objects.add(label)
+                checked_cluster.add(target_cluster_label)
 
         for cluster_label, cluster in cluster_properties.items():  # for each cluster
+            if cluster_label in checked_cluster:
+                continue
+
             possible_objects = {}
-
             for label, obj in self._object_dict.items():  # for each object
+                if label in modified_objects:
+                    continue
                 overlap = self._compute_overlap(obj, cluster)
-
                 if overlap > self.config["overlap_threshold"]:
                     possible_objects[label] = overlap
-                    objects_to_cluster[label].append(cluster_label)
-
-            should_discard = self._should_discard_cluster(cluster)
 
             if not possible_objects:  # No match existing object
-                if should_discard:
-                    continue
-                self._create_object(cluster)
+                label = self._create_object(cluster)
             else:
                 label = max(possible_objects)  # max would return the "key" of the maximum "value".
-                if should_discard:
-                    self._decrease_confidence(label)
-                else:
-                    self._increase_confidence(label)
-                self._update_object(label, cluster)
+                self._object_dict[label].update_property(cluster)  # _update_object(label, cluster)
+            modified_objects.add(label)
 
-        for obj_label, obj_cluster in objects_to_cluster.items():
-            if len(obj_cluster) == 0:
-                self._lost_object(obj_label)
+        all_keys = set(self._object_dict.keys())
+        not_modified_objects = all_keys.difference(modified_objects)
 
+        for obj_label in not_modified_objects:
+            should_remove = self._object_dict[obj_label].lost()
+            if should_remove:
+                self._remove_object(obj_label)
+
+        all_objects = list(self._object_dict.items())
+        for obj_label1, obj1 in all_objects[:-1]:
+            if obj_label1 not in self._object_dict: continue
+            for obj_label2, obj2 in all_objects[1:]:
+                if obj_label2 not in self._object_dict: continue
+                overlap = self._compute_object_overlap(obj1, obj2)
+                if overlap > self.config["overlap_threshold"]:
+                    if obj1["confidence"] < obj2["confidence"]:
+                        self._remove_object(obj_label1)
+                    else:
+                        self._remove_object(obj_label2)
         return self._object_dict
+
+    def _should_decrease_confidence(self, obj_cluster):
+        should = False
+        if len(obj_cluster["occupied_grids"]) < self.min_cluster_occupied_grids:
+            should = True
+        if obj_cluster["length"] > self.config["max_object_length"]:
+            should = True
+        if obj_cluster["high"] > self.config["max_object_bottom_height"]:
+            should = True
+        if obj_cluster["status"] == LOST:
+            should = True
+        return should
+
+    def _verify_objects(self):
+        for obj_label, obj in self._object_dict.items():
+            if self._should_decrease_confidence(obj):
+                obj.decrease_confidence()
+            else:
+                obj.increase_confidence()
 
     @property
     def object_dict(self):
@@ -352,94 +280,36 @@ class SLAM(object):
                 if obj_info["confidence"] > self.config["min_detected_confidence"]}
 
     def update(self, input_dict):
-
-        if input_dict["points"] is None:
-            return None
-
-        # if input_dict
-
-        # points, weight, high, low,
-        self._cluster_map.fill(EMPTY)
-
-        # newtime = runtime
-        # self.interval = newtime - self.runtime
-
-        ### PENGZHENGHAO WORKAROUND
-        self.interval = 1
-
-        # if self.interval != 0:
-        # self.runtime = newtime
-        # self.image_high = map_high
-        # self.image_low = map_low
-        # self.image_n = map_n
-        # self._occupied_map = (self.image_n >= image_n_std) * 1
-        # self.get_localmap(posx, posy)
-        # self.confirm_localmap()
-        # cluster_dict, labels_range = self.find_cluster(kwargs["points"], kwargs["weight"])
         points, weight, high, low = input_dict["points"], input_dict["weight"], input_dict["high"], \
                                     input_dict["low"]
 
         occupied_grids = input_dict["indices"]
-
-        raw_cluster_dict = self._find_cluster(points, weight, high, low,
-                                              occupied_grids)
-        # if raw_cluster_dict is None:
-        #     return None
-
-        prop = self._process_cluster(raw_cluster_dict)
+        if points is not None:
+            raw_cluster_dict = self._find_cluster(points, weight, high, low,
+                                                  occupied_grids)
+            prop = self._process_cluster(raw_cluster_dict)
+        else:
+            prop = {}
 
         self._register_cluster(prop)
 
-        return {"cluster_map": self._cluster_map,
-                # "object_dict": self.object_dict}
-                "object_dict": self._object_dict}
+        self._verify_objects()
 
-
-        # self.analyze_cluster(0, 0, raw_cluster_dict)
-        # self.map_cluster_to_object()
-        # self.map_object_to_static_obstacle()
-        # self.refresh_localmap()
-        # self.refresh_globalmap(posx, posy)
-        # self.publish(dev, posx, posy)
-
-        # inf = [posx, posy, self.runtime]
-        # globalmap_size = [num_out_x, x_global[0], x_global[1], num_out_y, y_global[0], y_global[1]]
-        # objnum = len(self.objects)
-
-        # objects_out = np.zeros((100, 17))
-        # objects_out[0:objnum, :] = self.objects
-
-        # self.num_pub += 1
-        # return {
-        #     'pos&time': inf,
-        #     # publish image information
-        #     'image_high': self.image_high,
-        #     'image_low': self.image_low,
-        #     'image_n': self.image_n,
-        #     'cluster_map': self._cluster_map,
-        #     'image_gain': self._occupied_map,
-        #     # publish global_confidence_map information
-        #     'global_confidence_map': self.global_confidence_map_output,
-        #     'globalmap_size': globalmap_size,
-        #     # publish object information
-        #     'objects': objects_out,
-        #     # publish time information
-        #     'timestamp': self.num_pub
-        # }
+        return self._object_dict
 
 
 if __name__ == "__main__":
-    from utils import setup_logger, FPSTimer, Visualizer
     import os
     import argparse
-    from lidar_map import LidarMap, lidar_config
     import logging
-    from utils import lazy_read_data
+    from utils import setup_logger, FPSTimer, Visualizer, lazy_read_data
+    from lidar_map import LidarMap, lidar_config
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--render", '-r', action="store_true")
     parser.add_argument("--path", '-p', required=True, help="The path of target h5 file.")
     parser.add_argument("--save", '-s', action="store_true")
+    parser.add_argument("--fps", type=int, default=-1)
     args = parser.parse_args()
 
     assert args.path.endswith(".h5")
@@ -447,19 +317,22 @@ if __name__ == "__main__":
     setup_logger("DEBUG")
 
     data = lazy_read_data(args.path)
-    lidar_data = data['lidar_data'][17100:]
-    extra_data = data['extra_data'][17100:]
 
-    # lidar_data = data['lidar_data']
-    # extra_data = data['extra_data']
+    start = 17100
+    # start = 17300
+
+    lidar_data = data['lidar_data'][start:]
+    extra_data = data['extra_data'][start:]
 
     map = LidarMap(lidar_config)
-    slam = SLAM()
+    detector = Detector()
 
     OBSERVE = "cluster_map"
-    v = Visualizer(OBSERVE, slam_config["map_size"], smooth=False, max_size=800)
+    v = Visualizer(OBSERVE, detector_config["map_size"], smooth=True, max_size=1000)
 
-    fps_timer = FPSTimer(force_fps=None)
+    if args.fps == -1:
+        args.fps = None
+    fps_timer = FPSTimer(force_fps=args.fps)
 
     l2i = build_location_to_index(lidar_config)
 
@@ -468,16 +341,12 @@ if __name__ == "__main__":
     for l, e in zip(lidar_data, extra_data):
         with fps_timer:
             ret = map.update(l, e)
-
-            mr = slam.update(ret)
+            object_d = detector.update(ret)
 
             if args.save:
                 save_data.append(ret)
             if args.render:
-                if mr is not None:
-                    stop = v.draw(ret["map_n"], objects=mr["object_dict"])
-                # TODO add fps display.
-
+                stop = v.draw(ret["map_n"], objects=object_d)
                 if stop:
                     break
 
