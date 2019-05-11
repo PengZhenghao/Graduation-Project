@@ -35,13 +35,14 @@ def np_logical_and_list(*lis):
         mask = np.logical_and(mask, exp)
     return mask
 
+
 def setup_logger(log_level='INFO'):
     assert isinstance(log_level, str)
     if not os.path.exists("log"):
         os.mkdir("log")
     log_format = "[%(levelname)s]\t%(asctime)s: %(message)s"
-    # if config:
-    #     log_level = config.log_level.upper()
+    # if lidar_config:
+    #     log_level = lidar_config.log_level.upper()
     # else:
     #     log_level = "INFO"
     logging.basicConfig(filename="log/" + get_formatted_log_file_name().format("VLPmonitor"),
@@ -59,6 +60,29 @@ def read_data(h5_path):
         for k in f.keys():
             ret[k] = f[k][:]
     return ret
+
+
+def lazy_read_data(h5_path):
+    ret = {}
+    f = h5py.File(h5_path, 'r')
+    for k in f.keys():
+        ret[k] = f[k]
+    return ret
+
+
+def build_index_to_location(config):
+    def index_to_location(d):
+        return d * config["grid_size"] - config["map_size"] / 2
+
+    return index_to_location
+
+
+def build_location_to_index(config):
+    def location_to_index(x):
+        return (np.floor((x[:, 0] + config["map_size"] / 2) / config["grid_size"]).astype(np.int),
+                np.floor((x[:, 1] + config["map_size"] / 2) / config["grid_size"]).astype(np.int))
+
+    return location_to_index
 
 
 def rotmatrix(rot_m, roll, pitch, yaw):
@@ -99,6 +123,9 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
+color_white = (255, 255, 255)
+
+
 class Visualizer(object):
     def __init__(self, name, side_length, smooth=True, zoom=1.0, max_size=800):
         self.name = name
@@ -107,6 +134,7 @@ class Visualizer(object):
         self.mean = AverageMeter()
         self.std = AverageMeter()
         self.max_size = max_size
+        self.scale = 1.0
         self.smooth = smooth
         self.central_ratio = 1 / zoom
         self.side_length = side_length  # Side length is the length of the detecting area, in meters.
@@ -115,10 +143,12 @@ class Visualizer(object):
         assert self.central_ratio <= 1
 
     def _scale(self, image):
-        assert isinstance(self.image, np.ndarray)
-        assert image.ndim == 2
-        assert image.shape[0] == image.shape[1]
-        return cv2.resize(image, (self.max_size, self.max_size))
+        # assert isinstance(self.image, np.ndarray)
+        # assert image.ndim == 2
+        # assert image.shape[0] == image.shape[1]
+        assert isinstance(image, np.ndarray)
+
+        return cv2.resize(image.T[::-1, :], (self.max_size, self.max_size))
 
     def _normalize_plain(self, image):
         return 255 * (image - image.min()) / (image.max() - image.min() + 1e-6)
@@ -140,18 +170,44 @@ class Visualizer(object):
         self.image[self.len // 2, :] = 255
         self.image[:, self.len // 2] = 255
         text_width = int(0.05 * self.len)
-        self._put_text((self.len - 2 * text_width, self.len // 2),
-                       "+{:.1f}".format(self.side_length * self.central_ratio / 2))
-        self._put_text((text_width, self.len // 2),
-                       "-{:.1f}".format(self.side_length * self.central_ratio / 2))
-        self._put_text((self.len // 2, self.len - text_width),
-                       "-{:.1f}".format(self.side_length * self.central_ratio / 2))
-        self._put_text((self.len // 2, text_width),
-                       "+{:.1f}".format(self.side_length * self.central_ratio / 2))
+        self._draw_text((self.len - 2 * text_width, self.len // 2),
+                        "+{:.1f}".format(self.side_length * self.central_ratio / 2))
+        self._draw_text((text_width, self.len // 2),
+                        "-{:.1f}".format(self.side_length * self.central_ratio / 2))
+        self._draw_text((self.len // 2, self.len - text_width),
+                        "-{:.1f}".format(self.side_length * self.central_ratio / 2))
+        self._draw_text((self.len // 2, text_width),
+                        "+{:.1f}".format(self.side_length * self.central_ratio / 2))
 
-    def _put_text(self, pos, text, color=(255, 255, 255), thickness=1, font_size=0.4):
+    def _draw_text(self, pos, text, color=color_white, thickness=1, font_size=0.4):
+        pos = tuple(pos)
         font = cv2.FONT_HERSHEY_SIMPLEX
         cv2.putText(self.image, text, pos, font, font_size, color, thickness)
+
+    def _draw_bounding_box(self, bounding_boxes_dict, max_size, color=color_white, thickness=1):
+        color = (color[2], color[1], color[0])
+
+        for text, (x_min, x_max, y_min, y_max) in bounding_boxes_dict.items():
+            if x_max <= x_min or y_max <= y_min:
+                err = "EMPTY CLUSTER FOUND! xmin {}, xmax {}, ymin {}, ymax {}".format(x_min, x_max,
+                                                                                       y_min, y_max)
+                logging.error(err)
+                continue
+
+            pos = (x_min,
+                   y_min - 4 if y_max * 1.1 > max_size else y_max + 2)
+
+            x_min, y_min = self._convert((x_min, y_min))
+            x_max, y_max = self._convert((x_max, y_max))
+            points = ((x_min, y_min),
+                      (x_min, y_max),
+                      (x_max, y_max),
+                      (x_max, y_min),
+                      (x_min, y_min))
+            for p1, p2 in zip(points[:-1], points[1:]):
+                cv2.line(self.image, p1, p2, color, thickness=thickness)
+            pos = self._convert(pos)
+            self._draw_text(pos, text)
 
     def _zoom(self, image):
         if self.central_ratio < 1:
@@ -162,8 +218,58 @@ class Visualizer(object):
             return image[(x - keepx):(x + keepx), (y - keepy):(y + keepy)]
         return image
 
-    def draw(self, image):
-        # Input range: [0, 259.0], dtype=float64
+    def _convert(self, pos):
+        return int(pos[0] * self.scale), int(
+            self.max_size - pos[1] * self.scale / self.central_ratio)
+
+    def _draw_objects(self, objects, color=color_white, thickness=1):
+        color = (color[2], color[1], color[0])
+
+        for label, info in objects.items():
+
+            x_min, y_min, x_max, y_max = info["bounding_box"]
+
+            x_min, y_min = self._convert((x_min, y_min))
+            x_max, y_max = self._convert((x_max, y_max))
+            points = ((x_min, y_min),
+                      (x_min, y_max),
+                      (x_max, y_max),
+                      (x_max, y_min),
+                      (x_min, y_min))
+
+            for p1, p2 in zip(points[:-1], points[1:]):
+                cv2.line(self.image, p1, p2, color, thickness=thickness)
+
+            if y_min < 0.05 * self.max_size:
+                increment = -15
+                ref = y_max
+            else:
+                increment = +15
+                ref = y_min
+            pos = [x_min, min(max(ref + increment, 0), self.max_size)]
+
+            text = "{}: {}".format(info["name"], info["status"])
+
+            self._draw_text(pos, text)
+            pos[1] = min(max(pos[1] + increment, 0), self.max_size)
+
+            text = "({:.2f},{:.2f})".format(*info["centroid"])
+            self._draw_text(pos, text)
+            pos[1] = min(max(pos[1] + increment, 0), self.max_size)
+
+            for k, v in info.items():
+                if isinstance(v, float):
+                    text = "{:8.8}:{:.2f}".format(k, v)
+                elif isinstance(v, int):
+                    text = "{:8.8}:{}".format(k, v)
+                else:
+                    continue
+                self._draw_text(pos, text)
+                pos[1] = min(max(pos[1] + increment, 0), self.max_size)
+
+    def draw(self, image, objects=None, bounding_boxes_dict=None):
+        # We ask the coordination of all input are in the standard form.
+        self.scale = self.max_size / image.shape[0]
         if self.smooth:
             heatmap = self._normalize_range(image)
         else:
@@ -173,6 +279,11 @@ class Visualizer(object):
         heatmap = self._scale(heatmap)
         self.image = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
         self._add_reference()
+        if objects:
+            self._draw_objects(objects)
+
+        if bounding_boxes_dict:
+            self._draw_bounding_box(bounding_boxes_dict, image.shape[0])
         return self.display()
 
     def display(self):
@@ -210,166 +321,29 @@ def assert_euqal(a1, a2):
 
 
 class FPSTimer(object):
-    def __init__(self, log_interval=10):
+    def __init__(self, force_fps=None, log_interval=10):
         self.cnt = 0
         self.log_interval = log_interval
         self.queue = deque(maxlen=log_interval)
-        self.queue.append(time.time())
+        self.t = time.time()
+        self.queue.append(self.t)
+        self.force_fps = force_fps
 
     def __enter__(self):
         self.cnt += 1
-        et = time.time()
-        self.queue.append(et)
+        self.t = time.time()
+        self.queue.append(self.t)
         if self.cnt < self.log_interval:
             return
 
         logging.info(
             "Average FPS {:.4f} (Smoothed by averaging last {} frames, total passed {} frames).".format(
-                self.log_interval / (et - self.queue[0]),
+                self.log_interval / (self.t - self.queue[0]),
                 self.log_interval, self.cnt))
-        # self.st = et
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        pass
-
-
-
-
-        # def find_cluster():ster == 0)] = 0
-        #     # if obstacles have good confidence level in local map or exist in chart, they will be marked with a very large cluster number 10000
-        #     fast_cluster = np.zeros((num_grid, num_grid))
-        #     fast_cluster[np.where(self.localmap >= minlevel_map)] = 10000
-        #     fast_cluster[np.where(self.localchart == 1)] = 10000
-        #     # DBSCAN density set to mindensity_fast,which is larger than mindensity_normal, to find cluster 10000
-        #     fast_ctest = (fast_cluster > 0) * 1
-        #     fast_cstate = fast_ctest * 1
-        #     self.num_cluster = 0
-        #     for p in range(num_grid):
-        #         for q in range(num_grid):
-        #             if self.image_binary[p, q] == 1 and (not (fast_ctest[p, q] == 1 and fast_cstate[p, q] == 0)):
-        #                 neighbor_xmin = max(0, p - neighborsize)
-        #                 neighbor_xmax = min(num_grid, p + neighborsize + 1)
-        #                 neighbor_ymin = max(0, q - neighborsize)
-        #                 neighbor_ymax = min(num_grid, q + neighborsize + 1)
-        #                 neighbor_binary = self.image_binary[neighbor_xmin:neighbor_xmax, neighbor_ymin:neighbor_ymax]
-        #                 neighbor_num = neighbor_binary.sum()
-        #                 fast_ctest[p, q] = 1
-        #                 if neighbor_num >= mindensity_fast:
-        #                     fast_cstate[p, q] = 1
-        #                     max_clusternum = (
-        #                         fast_cluster[neighbor_xmin:neighbor_xmax, neighbor_ymin:neighbor_ymax] * fast_cstate[
-        #                                                                                                  neighbor_xmin:neighbor_xmax,
-        #                                                                                                  neighbor_ymin:neighbor_ymax]).max()  # max cluster number of fast core points in neighbor
-        #                     # no fast core in  belong to existing cluster
-        #                     if max_clusternum == 0:
-        #                         self.num_cluster += 1
-        #                         fast_cluster[p, q] = self.num_cluster
-        #                         for m in range(neighbor_xmin, neighbor_xmax):
-        #                             for n in range(neighbor_ymin, neighbor_ymax):
-        #                                 if self.image_binary[m, n] == 1:
-        #                                     fast_cluster[m, n] = self.num_cluster
-        #                                     if fast_ctest[m, n] == 0:
-        #                                         mn_neighbor_xmin = max(0, m - neighborsize)
-        #                                         mn_neighbor_xmax = min(num_grid, m + neighborsize + 1)
-        #                                         mn_neighbor_ymin = max(0, n - neighborsize)
-        #                                         mn_neighbor_ymax = min(num_grid, n + neighborsize + 1)
-        #                                         mn_neighbor_binary = self.image_binary[mn_neighbor_xmin:mn_neighbor_xmax,
-        #                                                              mn_neighbor_ymin:mn_neighbor_ymax]
-        #                                         mn_neighbor_num = mn_neighbor_binary.sum()
-        #                                         fast_ctest[m, n] = 1
-        #                                         if mn_neighbor_num >= mindensity_fast:
-        #                                             fast_cstate[m, n] = 1
-        #                     else:
-        #                         fast_cluster[p, q] = max_clusternum
-        #                         for m in range(neighbor_xmin, neighbor_xmax):
-        #                             for n in range(neighbor_ymin, neighbor_ymax):
-        #                                 if self.image_binary[m, n] == 1:
-        #                                     if fast_cluster[m, n] == 0:
-        #                                         fast_cluster[m, n] = max_clusternum
-        #                                         if fast_ctest[m, n] == 0:
-        #                                             mn_neighbor_xmin = max(0, m - neighborsize)
-        #                                             mn_neighbor_xmax = min(num_grid, m + neighborsize + 1)
-        #                                             mn_neighbor_ymin = max(0, n - neighborsize)
-        #                                             mn_neighbor_ymax = min(num_grid, n + neighborsize + 1)
-        #                                             mn_neighbor_binary = self.image_binary[
-        #                                                                  mn_neighbor_xmin:mn_neighbor_xmax,
-        #                                                                  mn_neighbor_ymin:mn_neighbor_ymax]
-        #                                             mn_neighbor_num = mn_neighbor_binary.sum()
-        #                                             fast_ctest[m, n] = 1
-        #                                             if mn_neighbor_num >= mindensity_fast:
-        #                                                 fast_cstate[m, n] = 1
-        #                                     elif fast_cluster[m, n] != max_clusternum:
-        #                                         if fast_cstate[
-        #                                             m, n] == 1:  # only core points can combine their cluster with others
-        #                                             fast_cluster[
-        #                                                 np.where(fast_cluster == fast_cluster[m, n])] = max_clusternum
-        #     fast_cluster[np.where(fast_cluster != 10000)] = 0
-        #     # find normal cluster without disturbance of cluster 10000
-        #     self.image_binary[np.where(fast_cluster == 10000)] = 0
-        #     # DBSCAN density set to mindensity_normal to find normal cluster
-        #     normal_cluster = np.zeros((num_grid, num_grid))
-        #     normal_ctest = np.zeros((num_grid, num_grid))
-        #     normal_cstate = np.zeros((num_grid, num_grid))
-        #     self.num_cluster = 0
-        #     for p in range(num_grid):
-        #         for q in range(num_grid):
-        #             if self.image_binary[p, q] == 1 and (not (normal_ctest[p, q] == 1 and normal_cstate[p, q] == 0)):
-        #                 neighbor_xmin = max(0, p - neighborsize)
-        #                 neighbor_xmax = min(num_grid, p + neighborsize + 1)
-        #                 neighbor_ymin = max(0, q - neighborsize)
-        #                 neighbor_ymax = min(num_grid, q + neighborsize + 1)
-        #                 neighbor_binary = self.image_binary[neighbor_xmin:neighbor_xmax, neighbor_ymin:neighbor_ymax]
-        #                 neighbor_num = neighbor_binary.sum()
-        #                 normal_ctest[p, q] = 1
-        #                 if neighbor_num >= mindensity_normal:
-        #                     normal_cstate[p, q] = 1
-        #                     max_clusternum = (
-        #                         normal_cluster[neighbor_xmin:neighbor_xmax, neighbor_ymin:neighbor_ymax] * normal_cstate[
-        #                                                                                                    neighbor_xmin:neighbor_xmax,
-        #                                                                                                    neighbor_ymin:neighbor_ymax]).max()  # max cluster number in neighbor
-        #                     # no neighbor belong to existing cluster
-        #                     if max_clusternum == 0:
-        #                         self.num_cluster += 1
-        #                         normal_cluster[p, q] = self.num_cluster
-        #                         for m in range(neighbor_xmin, neighbor_xmax):
-        #                             for n in range(neighbor_ymin, neighbor_ymax):
-        #                                 if self.image_binary[m, n] == 1:
-        #                                     normal_cluster[m, n] = self.num_cluster
-        #                                     if normal_ctest[m, n] == 0:
-        #                                         mn_neighbor_xmin = max(0, m - neighborsize)
-        #                                         mn_neighbor_xmax = min(num_grid, m + neighborsize + 1)
-        #                                         mn_neighbor_ymin = max(0, n - neighborsize)
-        #                                         mn_neighbor_ymax = min(num_grid, n + neighborsize + 1)
-        #                                         mn_neighbor_binary = self.image_binary[mn_neighbor_xmin:mn_neighbor_xmax,
-        #                                                              mn_neighbor_ymin:mn_neighbor_ymax]
-        #                                         mn_neighbor_num = mn_neighbor_binary.sum()
-        #                                         normal_ctest[m, n] = 1
-        #                                         if mn_neighbor_num >= mindensity_normal:
-        #                                             normal_cstate[m, n] = 1
-        #                     else:
-        #                         normal_cluster[p, q] = max_clusternum
-        #                         for m in range(neighbor_xmin, neighbor_xmax):
-        #                             for n in range(neighbor_ymin, neighbor_ymax):
-        #                                 if self.image_binary[m, n] == 1:
-        #                                     if normal_cluster[m, n] == 0:
-        #                                         normal_cluster[m, n] = max_clusternum
-        #                                         if normal_ctest[m, n] == 0:
-        #                                             mn_neighbor_xmin = max(0, m - neighborsize)
-        #                                             mn_neighbor_xmax = min(num_grid, m + neighborsize + 1)
-        #                                             mn_neighbor_ymin = max(0, n - neighborsize)
-        #                                             mn_neighbor_ymax = min(num_grid, n + neighborsize + 1)
-        #                                             mn_neighbor_binary = self.image_binary[
-        #                                                                  mn_neighbor_xmin:mn_neighbor_xmax,
-        #                                                                  mn_neighbor_ymin:mn_neighbor_ymax]
-        #                                             mn_neighbor_num = mn_neighbor_binary.sum()
-        #                                             normal_ctest[m, n] = 1
-        #                                             if mn_neighbor_num >= mindensity_normal:
-        #                                                 normal_cstate[m, n] = 1
-        #                                     elif normal_cluster[
-        #                                         m, n] != max_clusternum:  # only core points can combine their cluster with others
-        #                                         if normal_cstate[m, n] == 1:
-        #                                             normal_cluster[
-        #                                                 np.where(normal_cluster == normal_cluster[m, n])] = max_clusternum
-        #     self.image_cluster = fast_cluster + normal_cluster
-        #     # remove noise
-        #     self.image_binary[np.where(self.image_clu
+        if self.force_fps:
+            now = time.time()
+            if 1 / (now - self.t) > self.force_fps:
+                sleep = 1 / self.force_fps + self.t - now
+                time.sleep(sleep)

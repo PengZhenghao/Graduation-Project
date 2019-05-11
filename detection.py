@@ -1,7 +1,7 @@
 import os
 
 from VLP import setup_vlp
-from build_map import Image
+# from build_map import Image
 from utils import FPSTimer
 from utils import Visualizer, Reader
 
@@ -27,7 +27,6 @@ class Detector(object):
         # get the new "frame raw data"
         lidar_data, extra_data = self.data_provider.update()
         ret = self.image.update(lidar_data, extra_data)
-        # if
 
     def render(self):
         # pop up a OpenCV window. I am not really sure what to show, cause many info need to show.
