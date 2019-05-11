@@ -1,13 +1,38 @@
-from recorder import Recorder
+import logging
+import pickle
 
-config = {"exp_name": "0419-ob", "save_dir": "experiments"}
-r = Recorder(config)
+from msgdev import MsgDevice
 
-data = r.read()
-lidar_data = data["lidar_data"][:]
-# frames = data["frame"][:]
-extra_data = data["extra_data"][:]
-print("lidar_data contains {} and its shape is {}.".format(lidar_data, lidar_data.shape))
-print("frame means for each datapoint {}.".format(lidar_data.mean(1)))
-m = lidar_data.mean(1)
-print(m)
+
+def build_push_data(object_dict, target):
+    ret = {k: {"centroid": v["centroid"].tolist()} for k, v in object_dict.items()}
+    ret["target"] = target
+    # return ret
+    return pickle.dumps(ret)
+
+
+def build_push_detection_dev(push_detection_dev):
+    push_detection_dev.open()
+    # push_detection_dev.pub_bind('tcp://0.0.0.0:55010')  # 上传端口
+    push_detection_dev.sub_connect("tcp://192.168.0.8:55019")
+    push_detection_dev.sub_add_url("det.data", [-100] * 7)
+
+
+if __name__ == "__main__":
+    push_detection_dev = MsgDevice()
+    build_push_detection_dev(push_detection_dev)
+
+    from msgdev import PeriodTimer
+
+    t = PeriodTimer(0.1)
+    try:
+        while True:
+            with t:
+                data = push_detection_dev.sub_get("det.data")
+                print(data)
+                # print(data, pickle.loads(data))
+
+    finally:
+        push_detection_dev.pub_set("data", pickle.dumps(None))
+        push_detection_dev.close()
+        logging.info("Everything Closed!")

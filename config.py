@@ -7,7 +7,7 @@ vlp_frequency = 10  # frequency of vlp16, matching its setting on web
 res_azi = vlp_frequency * 2  # resolution of azimuth angle
 num_packet = int(ceil(36000 / (res_azi * 24)))
 
-grid_size = 0.2
+grid_size = 0.1
 
 lidar_config = {
     "grid_size": grid_size,
@@ -24,9 +24,9 @@ detector_config = {
     "vrange": 5,
 
     "init_confidence": 0,
-    "min_detected_confidence": 40,
+    "min_detected_confidence": 30,
     "min_removal_confidence": 0,
-    "max_confidence": 200,
+    "max_confidence": 300,
 
     "search_range_coefficient": 1.01,  # (max_conf - current_conf) * ratio * length = search range
 

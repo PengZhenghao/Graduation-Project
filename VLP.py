@@ -51,7 +51,7 @@ packet = np.dtype([('block', block, 12)])
 
 
 def devinitial(dev):
-    # dev.pub_bind(data_addr)
+    # push_detection_dev.pub_bind(data_addr)
     dev.sub_connect('tcp://{}:55004'.format(vlp_config.local_ip))
     dev.sub_connect('tcp://{}:55005'.format(vlp_config.local_ip))
     dev.sub_connect('tcp://{}:55204'.format(vlp_config.local_ip))

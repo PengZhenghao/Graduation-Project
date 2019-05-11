@@ -30,8 +30,6 @@ class PeriodTimer(object):
     def __init__(self, interval):
         self.interval = interval
         self.i = 0
-
-    def start(self):
         self.start = monoclock()
 
     def __enter__(self):
@@ -182,6 +180,9 @@ class MsgDevice(object):
 
     def sub_get(self, url):
         return self.b2a(self._sub_get_bytes(url))
+
+    def sub_get_bytes(self, url):
+        return self._sub_get_bytes(url)
 
     def _sub_get_bytes(self, url):
         self.alive_ck += 1

@@ -1,5 +1,6 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+import logging
 from math import sqrt
 
 import numpy as np
@@ -311,7 +312,6 @@ if __name__ == "__main__":
     import os
     import argparse
     from lidar_map import LidarMap, lidar_config
-    import logging
     from utils import lazy_read_data
 
     parser = argparse.ArgumentParser()
