@@ -24,6 +24,7 @@ class DetectedObject(dict):
         self["status"] = JUST_FOUND
         points = cluster_property["occupied_grids"]
         self["bounding_box"] = points.min(0).tolist() + points.max(0).tolist()
+        self["life"] = 0
 
     def increase_confidence(self):
         self["confidence"] = min(self["confidence"] + 1, self.config["max_confidence"])
@@ -32,9 +33,10 @@ class DetectedObject(dict):
         self["confidence"] = max(self["confidence"] - 1, self.config["min_removal_confidence"])
 
     def update_property(self, cluster_property):
+        self.update(cluster_property)
         points = cluster_property["occupied_grids"]
         self["bounding_box"] = points.min(0).tolist() + points.max(0).tolist()
-        self.update(cluster_property)
+        self["life"] += 1
         self["status"] = CONFIRMING if self["confidence"] < self.config["min_detected_confidence"] \
             else TRACKING
         if self["status"] is not LOST and "search_range" in self:
@@ -42,6 +44,7 @@ class DetectedObject(dict):
             self.pop("search_radius")
 
     def lost(self):
+        self["life"] += 1
         if self["status"] == LOST:
             if "search_radius" not in self:
                 search_radius = 5 * (self["length"] / self.config["grid_size"])
@@ -60,7 +63,8 @@ class DetectedObject(dict):
         return False
 
     def __repr__(self):
-        return "<{}: {}>".format(self['name'], self['status'])
+        return "<{}: {} (Life: {}, Confidence: {})>".format(self['name'], self['status'],
+                                                            self["life"], self['confidence'])
 
 
 class Detector(object):
@@ -96,8 +100,6 @@ class Detector(object):
             return 0
         union = (y_max2 - y_min2) * (x_max2 - x_min2) + (y_max1 - y_min1) * (
             x_max1 - x_min1) - intersection
-        assert union >= -1e-6
-        assert intersection <= union
         return intersection / union
 
     def _compute_overlap(self, obj, cluster):
@@ -174,6 +176,7 @@ class Detector(object):
                 "occupied": cluster_info["occupied_grids"].shape[0],
                 "high": cluster_info["high"].max(),
                 "low": cluster_info["low"].min(),
+                # "label": label,
                 "occupied_grids": cluster_info["occupied_grids"],
                 "occupied_weight": weight,
             }
@@ -207,25 +210,20 @@ class Detector(object):
                     possible_clusters[cluster_label] = overlap
 
             if possible_clusters:
-                target_cluster_label = max(
-                    possible_clusters)  # max would return the "key" of the maximum "value".
-                obj.update_property(
-                    cluster_properties[target_cluster_label])  # _update_object(label, cluster)
+                # max would return the "key" of the maximum "value".
+                target_cluster_label = max(possible_clusters)
+                obj.update_property(cluster_properties[target_cluster_label])
                 modified_objects.add(label)
                 checked_cluster.add(target_cluster_label)
 
         for cluster_label, cluster in cluster_properties.items():  # for each cluster
-            if cluster_label in checked_cluster:
-                continue
-
+            if cluster_label in checked_cluster: continue
             possible_objects = {}
             for label, obj in self._object_dict.items():  # for each object
-                if label in modified_objects:
-                    continue
+                if label in modified_objects: continue
                 overlap = self._compute_overlap(obj, cluster)
                 if overlap > self.config["overlap_threshold"]:
                     possible_objects[label] = overlap
-
             if not possible_objects:  # No match existing object
                 label = self._create_object(cluster)
             else:
@@ -299,11 +297,12 @@ class Detector(object):
 
 
 if __name__ == "__main__":
+    from utils import setup_logger, FPSTimer, Visualizer
     import os
     import argparse
-    import logging
-    from utils import setup_logger, FPSTimer, Visualizer, lazy_read_data
     from lidar_map import LidarMap, lidar_config
+    import logging
+    from utils import lazy_read_data
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--render", '-r', action="store_true")
@@ -342,7 +341,6 @@ if __name__ == "__main__":
         with fps_timer:
             ret = map.update(l, e)
             object_d = detector.update(ret)
-
             if args.save:
                 save_data.append(ret)
             if args.render:
