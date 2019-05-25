@@ -1,7 +1,7 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 import logging
-from math import sqrt
+from math import sqrt, atan2, pi
 
 import numpy as np
 from sklearn.cluster import DBSCAN
@@ -26,6 +26,8 @@ class DetectedObject(dict):
         points = cluster_property["occupied_grids"]
         self["bounding_box"] = points.min(0).tolist() + points.max(0).tolist()
         self["life"] = 0
+        self["angle"] = atan2(self["centroid"][1], self["centroid"][0]) * 180 / pi
+        self["distance"] = sqrt(self["centroid"][1] ** 2 + self["centroid"][0] ** 2)
 
     def increase_confidence(self):
         self["confidence"] = min(self["confidence"] + 1, self.config["max_confidence"])
@@ -38,9 +40,11 @@ class DetectedObject(dict):
         points = cluster_property["occupied_grids"]
         self["bounding_box"] = points.min(0).tolist() + points.max(0).tolist()
         self["life"] += 1
+        self["angle"] = atan2(self["centroid"][1], self["centroid"][0]) * 180 / pi
+        self["distance"] = sqrt(self["centroid"][1] ** 2 + self["centroid"][0] ** 2)
         self["status"] = CONFIRMING if self["confidence"] < self.config["min_detected_confidence"] \
             else TRACKING
-        if self["status"] is not LOST and "search_range" in self:
+        if self["status"] != LOST and "search_range" in self:
             self.pop("search_range")
             self.pop("search_radius")
 
@@ -202,7 +206,7 @@ class Detector(object):
 
         for label, obj in self._object_dict.items():  # for each object
             possible_clusters = {}
-            if obj["status"] is not LOST:
+            if obj["status"] != LOST:
                 continue
 
             for cluster_label, cluster in cluster_properties.items():
@@ -307,6 +311,9 @@ class Detector(object):
         return self._object_dict
 
 
+import copy
+
+
 if __name__ == "__main__":
     from utils import setup_logger, FPSTimer, Visualizer, ESC
     import os
@@ -319,6 +326,7 @@ if __name__ == "__main__":
     parser.add_argument("--path", '-p', required=True, help="The path of target h5 file.")
     parser.add_argument("--save", '-s', action="store_true")
     parser.add_argument("--fps", type=int, default=-1)
+    parser.add_argument("--start", type=int, default=0)
     args = parser.parse_args()
 
     assert args.path.endswith(".h5")
@@ -327,13 +335,13 @@ if __name__ == "__main__":
 
     data = lazy_read_data(args.path)
 
-    start = 17100
+    # start = 17100
     # start = 17300
 
-    lidar_data = data['lidar_data'][start:]
-    extra_data = data['extra_data'][start:]
+    lidar_data = data['lidar_data'][args.start:]
+    extra_data = data['extra_data'][args.start:]
 
-    map = LidarMap(lidar_config)
+    map = LidarMap(lidar_config, offset=0)
     detector = Detector()
 
     OBSERVE = "cluster_map"
@@ -349,8 +357,12 @@ if __name__ == "__main__":
     stop = False
     pressed_key = -1
     target = None
+    cnt = 0
 
     for l, e in zip(lidar_data, extra_data):
+        cnt += 1
+        if cnt == 6000:
+            break
         with fps_timer:
             ret = map.update(l, e)
             object_d = detector.update(ret)
@@ -365,7 +377,7 @@ if __name__ == "__main__":
                 target = None
 
             if args.save:
-                save_data.append(ret)
+                save_data.append(copy.deepcopy(object_d))
             if args.render:
                 pressed_key = v.draw(ret["map_n"], objects=object_d,
                                      target=target or list(avaliables.values()))

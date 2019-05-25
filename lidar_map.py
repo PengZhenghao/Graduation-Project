@@ -1,4 +1,5 @@
-from math import ceil, pi
+import logging
+from math import ceil, pi, cos, sin
 
 import numpy as np
 
@@ -19,14 +20,21 @@ lidar_config = {
 
 from utils import build_index_to_location
 
-
 class LidarMap(object):
-    def __init__(self, config):
+    def __init__(self, config, offset=None):
         # self.rot_m = np.zeros((3, 3))  # rotation matrix
+        if offset is None:
+            import pickle
+            offset = pickle.load(open("offset.pkl", "rb"))
+            assert isinstance(offset, dict)
+            logging.warning("We have load offset from file! The content is: {}".format(offset))
+            offset = offset["offset"]
         self.runtime = 0
         self.posx = 0
         self.posy = 0
         self.config = config
+        print("Offset set to:", offset)
+        self.offset = offset
         self.grid_size = config["grid_size"]
         self.map_size = config["map_size"]
         self.min_dis = config["min_dis"]
@@ -47,6 +55,7 @@ class LidarMap(object):
         for p in range(8):
             for q in range(2):
                 angs[p, q] = (q * 16 + p * 2 - 15) / 180 * pi
+                # angs[p, q] = (q * 16 + p * 2 - 15) / 180 * pi
         angs = angs.flatten()
         self.cos_angs = np.cos(angs)
         self.sin_angs = np.sin(angs)
@@ -62,11 +71,11 @@ class LidarMap(object):
         distance, azimuth = np.split(data.reshape(self.num_packet, 408), (384,), axis=1)
 
         distance = distance.reshape(-1, 12, 2, 16) * 0.002
-        azimuth = azimuth.reshape(-1, 12, 2, 1) * np.pi / 18000
+        azimuth = azimuth.reshape(-1, 12, 2, 1) * pi / 18000
 
-        new_x = distance * self.cos_angs * np.cos(azimuth).repeat(16, axis=3)
-        new_y = distance * self.cos_angs * np.sin(azimuth).repeat(16, axis=3)
-        new_z = (- distance * self.sin_angs).flatten()  # 75 12 2 16
+        new_x = -distance * self.cos_angs * np.cos(azimuth + self.offset).repeat(16, axis=3)
+        new_y = distance * self.cos_angs * np.sin(azimuth + self.offset).repeat(16, axis=3)
+        new_z = (distance * self.sin_angs).flatten()  # 75 12 2 16
 
         new_points = np.stack([new_x.flatten(), new_y.flatten()], axis=1)
         new_position = np.floor((new_points + self.map_size / 2) / self.grid_size).astype(np.int)
@@ -108,6 +117,18 @@ class LidarMap(object):
                 "indices": indices,
                 "high": self.map_high[n_indices][non_zero_mask],
                 "low": self.map_low[n_indices][non_zero_mask]}
+
+    def gps_tranform(self, points, offset):
+
+        assert isinstance(points, np.ndarray)
+        assert points.shape[1] == 2
+
+        ret = []
+        ret.append(points[:, 0] * cos(offset) - points[:, 1] * sin(offset))
+        ret.append(points[:, 0] * sin(offset) + points[:, 1] * cos(offset))
+        return np.stack(ret, axis=1)
+
+
 
     def update(self, lidar_data, extra_data):
         self.refresh()

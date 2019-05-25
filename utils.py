@@ -128,11 +128,10 @@ class MovingAverage(object):
     def __init__(self, max_len=10):
         self.val = deque(maxlen=max_len)
         self.avg = None
-        self.maxlen = max_len
 
     def update(self, val):
         self.val.append(val)
-        self.avg = sum(self.val) / self.maxlen
+        self.avg = sum(self.val) / len(self.val)
 
 
 color_white = (255, 255, 255)
@@ -290,6 +289,9 @@ class Visualizer(object):
         if key == ESC:
             cv2.destroyAllWindows()
         return key
+
+    def close(self):
+        cv2.destroyAllWindows()
 
 
 class Reader(object):  # This class should merged with Recorder. But I don't give a shit for this.

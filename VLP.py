@@ -13,7 +13,8 @@ vlp_config = VLPConfig()
 
 # User Settings
 # VLP16_Connected = 1 #if not connected, this program will use self-created lidar data
-# data_addr = 'tcp://0.0.0.0:{}'.format(vlp_config.vlp_port)  # send data to this address, including dis384,ref384,azi24
+data_addr = 'tcp://0.0.0.0:{}'.format(
+    vlp_config.vlp_port)  # send data to this address, including dis384,ref384,azi24
 # data_addr = 'tcp://192.168.1.222' #send data to this address, including dis384,ref384,azi24
 t_refresh = 1  # period to refresh
 
@@ -51,7 +52,7 @@ packet = np.dtype([('block', block, 12)])
 
 
 def devinitial(dev):
-    # push_detection_dev.pub_bind(data_addr)
+    dev.pub_bind(data_addr)
     dev.sub_connect('tcp://{}:55004'.format(vlp_config.local_ip))
     dev.sub_connect('tcp://{}:55005'.format(vlp_config.local_ip))
     dev.sub_connect('tcp://{}:55204'.format(vlp_config.local_ip))
@@ -139,6 +140,9 @@ class VLP:
         extra_data = np.asarray([posx, posy, roll, pitch, yaw, posx102, posy102, self.runtime])
         self.image[-8:] = extra_data
         self.extra_data = extra_data
+        assert isinstance(self.dev, MsgDevice)
+        self.dev.pub_set("vlp.image", self.image.tolist())
+
 
     def update(self):
         # self.image = []

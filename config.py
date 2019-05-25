@@ -24,7 +24,7 @@ detector_config = {
     "vrange": 5,
 
     "init_confidence": 0,
-    "min_detected_confidence": 30,
+    "min_detected_confidence": 20,
     "min_removal_confidence": 0,
     "max_confidence": 300,
 
